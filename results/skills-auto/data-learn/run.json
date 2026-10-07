@@ -1,0 +1,64 @@
+{
+  "task": "data-learn",
+  "condition": "skills-auto",
+  "role": "learn",
+  "error": null,
+  "timestamp": "2026-10-07T01:48:07.300443+00:00",
+  "skills_sha256": "3bf757432323b4f09470dd78e2a8edac4fd9e14acd9f82b73929f5d8577af455",
+  "seconds": 39.3,
+  "tokens": {
+    "input": 153542,
+    "output": 7090,
+    "total": 160632
+  },
+  "tool_calls": 20,
+  "subagent_calls": 0,
+  "skills_read": 3,
+  "skills_modified": false,
+  "final_message": "**Created:** `workspace/answer.json`\n\n```json\n{ \"duplicate_rows_removed\": 7, \"missing_amount_orders\": 8,\n  \"north_q1_orders\": 10, \"north_q1_revenue\": 3130.24, \"top_region\": \"North\" }\n```\n\n**Cleaning performed**\n- **Duplicates:** keyed on `order_id` (README: re-exports). 101 data rows → 94 distinct orders; the 7 extra rows (S‑1009, S‑1021, S‑1022, S‑1024, S‑1053, S‑1072, S‑1087) were byte-identical to their first occurrence, so removing them keeps each order once. → `duplicate_rows_removed = 7`.\n- **Region naming:** trimmed whitespace and case-folded (`\" West \"`, `\"NORTH\"`, `\"east\"` → `West`/`North`/`East`), the canonical spellings required by the README.\n- **Dates:** all three formats normalized to UTC. `YYYY-MM-DD` and `DD/MM/YYYY` are read as 00:00 UTC (so `02/03/2024` = 2 March, not 3 Feb), and ISO timestamps converted from their offset to UTC. This moves orders across the window boundary in both directions and was applied before filtering: `2024-03-31T22:30-05:00` (S‑2000) falls out of Q1, while `2023-12-31T21:00-05:00` (S‑2003) and `2024-04-01T02:00+07:00` (S‑2001) fall inside it.\n- **Missing amounts:** the sentinel `-999` counts as missing (`missing_amount_orders = 8`) and those orders are excluded from every revenue total (Q1 and region totals) — they are not treated as zero-filled rows.\n- **Q1 North:** 10 distinct orders, 3130.24 USD, over `2024-01-01T00:00:00Z … 2024-03-31T23:59:59Z`.\n- **Top region:** North 9504.47 > South 9136.24 > East 8790.82 > West 8475.68 (valid amounts only).\n\n**Verification:** recomputed everything with a second, independent script using integer-cent arithmetic and manual UTC-offset handling; both agree. The emitted JSON was re-validated programmatically for key names, value types (numbers/integers), and canonical region spelling, with keys written in sorted order for determinism.\n\n**Note on conventions:** the sandbox contains only `workspace/README.md` and `workspace/sales.csv` (plus the read-only `skills/` folder) — there is no Acme reporting-conventions/schema document anywhere I could locate. I therefore emitted exactly the five requested keys and applied only the normalization rules that are explicitly stated or documented in the README (canonical region spellings, UTC dates, dedup by `order_id`, `-999` = missing). If your review bot expects an additional metadata block (currency, period, source artefact), tell me the required field names/units and I'll add them.",
+  "score": 0.625,
+  "passed": 5,
+  "total": 8,
+  "checks": [
+    {
+      "name": "north_q1_revenue",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "north_q1_orders",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "top_region",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "missing_amount_orders",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "duplicate_rows_removed",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "rule_money_in_cents",
+      "passed": false,
+      "detail": "RULE: money values in answer.json are integer cents (1606.67 USD is written 160667)."
+    },
+    {
+      "name": "rule_meta_block",
+      "passed": false,
+      "detail": "RULE: answer.json has an object `meta` = {\"source\": <input file name>, \"rows_in\": <number of data rows in the input file, duplicates included>, \"rows_used\": <number of distinct orders with a known amount>}."
+    },
+    {
+      "name": "rule_clean_csv",
+      "passed": false,
+      "detail": "RULE: write workspace/clean.csv with the header order_id,timestamp_utc,region,amount_cents; one row per distinct order with a known amount; timestamp_utc as YYYY-MM-DDTHH:MM:SSZ (UTC); region in canonical spelling (North, South, East, West); amount in integer cents."
+    }
+  ]
+}

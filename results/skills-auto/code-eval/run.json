@@ -1,0 +1,79 @@
+{
+  "task": "code-eval",
+  "condition": "skills-auto",
+  "role": "eval",
+  "error": null,
+  "timestamp": "2026-10-07T01:45:09.690584+00:00",
+  "skills_sha256": "3bf757432323b4f09470dd78e2a8edac4fd9e14acd9f82b73929f5d8577af455",
+  "seconds": 98.1,
+  "tokens": {
+    "input": 1602556,
+    "output": 15677,
+    "total": 1618233
+  },
+  "tool_calls": 52,
+  "subagent_calls": 0,
+  "skills_read": 3,
+  "skills_modified": false,
+  "final_message": "All tests pass. Here's what I changed:\n\n**`bookings/timeutil.py` — `parse_duration` (2 bugs)**\nIt only matched `\"1h30m\"`, so `\"2h\"` (and everything else) raised `ValueError`. Now it accepts every documented form — `\"1h30m\"`, `\"2h\"`, `\"45m\"`, `\"1:30\"`, bare minutes `\"45\"` — ignoring surrounding whitespace and still raising `ValueError` for anything else. Added a `str -> int` annotation.\n\n**`bookings/billing.py` — `billable_blocks` (2 bugs)**\nUsed `round()`, so a partial block could round *down* (20 min → 1 block instead of 2); now uses integer ceiling (`-(-minutes // block)`) so partial blocks always round up. It also silently accepted negative minutes; now raises `ValueError` as the docstring requires. Annotated `minutes: int, block: int = 15 -> int`.\n\n**`bookings/schedule.py` — `add_slot` (1 bug)**\nThe `slots=[]` mutable default was mutated and returned, leaking state across calls; now it defaults to `None` and returns a brand-new list (`[\"a\"]` then `[\"b\"]`). Also annotated `total_minutes(durations: Iterable[str]) -> int` and added the missing annotations on `add_slot`.\n\n**`bookings/calendar_export.py`** — added the missing `start_minute: int, duration_text: str -> int` annotations (behaviour already matched the docstring).\n\nConvention artifacts (no config/CONTRIBUTING exists in the repo, so I applied the skill's rules):\n- **Type annotations** on every public function parameter and return value (Acme style rule).\n- **`CHANGELOG.md`**: one bullet per fix under the existing `## Unreleased` heading.\n- **`tests/test_regressions.py`** (new file, existing tests untouched): one regression test per fixed bug, including the round-up, negative-minutes `ValueError`, no-shared-state/new-list behaviour, and all documented duration formats.\n\nVerification: `python -m pytest tests -q` → 9 passed (3 visible + 6 new), plus an independent check confirming ceiling behaviour for all 0–499 minutes, all five duration formats, whitespace handling, `ValueError` on malformed input, and complete annotations/docstrings on every public function.",
+  "score": 0.7272727272727273,
+  "passed": 8,
+  "total": 11,
+  "checks": [
+    {
+      "name": "visible_suite_passes",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "tests_not_modified",
+      "passed": false,
+      "detail": ""
+    },
+    {
+      "name": "parse_duration_all_formats",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "other_caller_fixed",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "billable_blocks_round_up",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "add_slot_no_shared_state",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "negative_minutes_rejected",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "rule_type_hints",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "rule_regression_tests",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "rule_changelog",
+      "passed": false,
+      "detail": ""
+    },
+    {
+      "name": "rule_version_bump",
+      "passed": false,
+      "detail": ""
+    }
+  ]
+}
