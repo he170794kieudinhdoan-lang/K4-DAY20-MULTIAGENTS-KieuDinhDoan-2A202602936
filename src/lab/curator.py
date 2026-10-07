@@ -55,6 +55,11 @@ def parse_skill_blocks(reply: str) -> list[tuple[str, str]]:
 # --------------------------------------------------------------------------------------------------
 
 
+import json
+from .model import make_model
+from .tasks import ROOT
+
+
 def curate_skills(results_dir="results", source_condition="baseline", out_dir=None, model=None, max_skills: int = 3) -> list[Path]:
     """Đọc các lần chạy của TÁC VỤ HỌC (role == "learn") trong `source_condition`, nhờ LLM viết skill, ghi file.
 
@@ -68,7 +73,116 @@ def curate_skills(results_dir="results", source_condition="baseline", out_dir=No
     model mặc định: make_model() (lab.model).
     Trả về: danh sách đường dẫn SKILL.md đã ghi.
     """
-    raise NotImplementedError("TODO: cài đặt curate_skills (xem guides/pseudocode/04_curator.md)")
+    if out_dir is None:
+        out_dir = ROOT / "skills" / "auto"
+    else:
+        out_dir = Path(out_dir)
+
+    results_path = Path(results_dir) / source_condition
+    runs = []
+    has_failures = False
+
+    if results_path.exists():
+        for run_file in sorted(results_path.glob("*/run.json")):
+            try:
+                data = json.loads(run_file.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+
+            if data.get("role") != "learn":
+                continue
+
+            failed = [
+                (c.get("name"), c.get("detail", ""))
+                for c in data.get("checks", [])
+                if not c.get("passed")
+            ]
+
+            trace_file = run_file.parent / "trace.md"
+            trace_excerpt = ""
+            if trace_file.exists():
+                try:
+                    trace_text = trace_file.read_text(encoding="utf-8")
+                    trace_excerpt = trace_text[-6000:]
+                except Exception:
+                    pass
+
+            if failed:
+                has_failures = True
+            runs.append({
+                "task": data.get("task", run_file.parent.name),
+                "failed": failed,
+                "trace": trace_excerpt,
+            })
+
+    if not has_failures:
+        print("Warning: no failed checks found in learning runs; skipping skill curation.")
+        return []
+
+    runs_text_parts = []
+    for r in runs:
+        if not r["failed"]:
+            continue
+        part = f"Task: {r['task']}\nFailed checks:\n"
+        for name, detail in r["failed"]:
+            part += f"- {name}: {detail}\n"
+        if r["trace"]:
+            part += f"Trace excerpt:\n{r['trace']}\n"
+        runs_text_parts.append(part)
+
+    runs_summary = "\n---\n".join(runs_text_parts)
+
+    prompt = (
+        f"You are an expert skill author for engineering and data analysis agents.\n"
+        f"Below are the failed checks (check names and evaluation bot feedback) and execution traces from the learning tasks.\n"
+        f"Identify general PROCEDURAL flaws and conventions violated (do NOT output task-specific hardcoded answers)\n"
+        f"and write up to {max_skills} concise skills to help avoid these failures on NEW similar tasks.\n\n"
+        f"Rules:\n"
+        f"- Skills must be general: do not mention task IDs, do not mention specific filenames from a single task, do not mention hardcoded answers or specific numbers.\n"
+        f"- Each skill must have a YAML frontmatter with `name` (lowercase letters, numbers, hyphens only, max 64 chars) and `description` (one sentence: WHEN to use this skill, max 1024 chars).\n"
+        f"- The body must be concise (max 40-50 lines), actionable instructions (checklists work best).\n"
+        f"- Output format, exactly:\n"
+        f"=== SKILL: <name> ===\n"
+        f"---\n"
+        f"name: <name>\n"
+        f"description: <when to use>\n"
+        f"---\n"
+        f"# <Title>\n"
+        f"<content>\n"
+        f"=== END ===\n\n"
+        f"Failed learning runs:\n"
+        f"{runs_summary}"
+    )
+
+    if model is None:
+        model = make_model()
+
+    response = model.invoke(prompt)
+    content = response.content
+    if isinstance(content, list):
+        reply_text = "\n".join(
+            p.get("text", "") if isinstance(p, dict) else str(p) for p in content
+        )
+    else:
+        reply_text = str(content)
+
+    blocks = parse_skill_blocks(reply_text)
+    written = []
+
+    for name, text in blocks:
+        if len(written) >= max_skills:
+            break
+        problems = validate_skill(text, expected_name=name)
+        if problems:
+            print(f"Skill '{name}' rejected due to: {problems}")
+            continue
+
+        skill_file = out_dir / name / "SKILL.md"
+        skill_file.parent.mkdir(parents=True, exist_ok=True)
+        skill_file.write_text(text, encoding="utf-8")
+        written.append(skill_file)
+
+    return written
 
 
 if __name__ == "__main__":

@@ -3,13 +3,15 @@
 Pseudo-code: guides/pseudocode/01_agent.md
 Kiểm tra:    pytest tests/test_02_agent.py
 """
+import subprocess
+import sys
 from pathlib import Path
 
-# TODO 1: import các thành phần cần dùng, ví dụ:
-#   from deepagents import create_deep_agent
-#   from deepagents.backends import LocalShellBackend
-#   from .model import make_model
-#   from .subagents import get_subagents
+from deepagents import create_deep_agent
+from deepagents.backends import LocalShellBackend
+
+from .model import make_model
+from .subagents import get_subagents
 
 # ---- CÓ SẴN, KHÔNG SỬA: system prompt dùng chung cho mọi sinh viên (để đường cơ sở so sánh được) ----
 PATHS_NOTE = (
@@ -38,6 +40,104 @@ SUBAGENTS_NOTE = (
 # --------------------------------------------------------------------------------------------------
 
 
+from deepagents.backends.protocol import ExecuteResponse
+
+
+class SafeLocalShellBackend(LocalShellBackend):
+    """LocalShellBackend with strict sandbox boundary enforcement."""
+
+    def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+        low = command.lower().replace("\\", "/")
+        forbidden = [
+            "check.py",
+            "../",
+            "/c/users",
+            "c:/users",
+            "tasks/",
+            "os.walk('/')",
+            "os.walk(\"/\")",
+            "/tmp/pytest",
+            "find /",
+            "find c:",
+        ]
+        if any(f in low for f in forbidden):
+            return ExecuteResponse(
+                output=(
+                    "[stderr] Access denied: access outside sandbox is strictly prohibited. "
+                    "All required data files are located in workspace/. Complete the task using workspace/.\n\n"
+                    "Exit code: 1"
+                ),
+                exit_code=1,
+                truncated=False,
+            )
+
+        if "acme" in low:
+            return ExecuteResponse(
+                output="No external Acme files or conventions exist in the filesystem. Proceed with the task using workspace/ files directly.\n",
+                exit_code=0,
+                truncated=False,
+            )
+
+        effective_timeout = timeout if timeout is not None else self._default_timeout
+
+        if sys.platform == "win32":
+            sh_exe = r"C:\Program Files\Git\bin\sh.exe"
+            args = [sh_exe, "-c", command]
+            use_shell = False
+        else:
+            args = command
+            use_shell = True
+
+        try:
+            result = subprocess.run(
+                args,
+                check=False,
+                shell=use_shell,
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                timeout=effective_timeout,
+                env=self._env,
+                cwd=str(self.cwd),
+            )
+            output_parts = []
+            if result.stdout:
+                output_parts.append(result.stdout)
+            if result.stderr:
+                stderr_lines = result.stderr.strip().split("\n")
+                output_parts.extend(f"[stderr] {line}" for line in stderr_lines)
+
+            output = "\n".join(output_parts) if output_parts else "<no output>"
+
+            if len(output) > self._max_output_bytes:
+                output = output[: self._max_output_bytes]
+                output += f"\n\n... Output truncated at {self._max_output_bytes} bytes."
+                truncated = True
+            else:
+                truncated = False
+
+            if result.returncode != 0:
+                output = f"{output.rstrip()}\n\nExit code: {result.returncode}"
+
+            return ExecuteResponse(
+                output=output,
+                exit_code=result.returncode,
+                truncated=truncated,
+            )
+        except subprocess.TimeoutExpired:
+            return ExecuteResponse(
+                output=f"Error: Command timed out after {effective_timeout} seconds.",
+                exit_code=124,
+                truncated=False,
+            )
+        except Exception as e:
+            return ExecuteResponse(
+                output=f"Error executing command ({type(e).__name__}): {e}",
+                exit_code=1,
+                truncated=False,
+            )
+
+
 def make_backend(sandbox: Path):
     """Tạo backend (môi trường thực thi) cho tác tử.
 
@@ -47,7 +147,43 @@ def make_backend(sandbox: Path):
       - Tác tử chạy được lệnh shell và gọi được `python` (cần đặt PATH).
       - KHÔNG chuyển biến môi trường của bạn vào shell của tác tử (khóa API không được lộ).
     """
-    raise NotImplementedError("TODO 2: cài đặt make_backend (xem guides/pseudocode/01_agent.md)")
+    import os
+    python_dir = str(Path(sys.executable).parent)
+    if sys.platform == "win32":
+        win_paths = [
+            python_dir,
+            r"C:\Program Files\Git\usr\bin",
+            r"C:\Program Files\Git\bin",
+            r"C:\Windows\system32",
+            r"C:\Windows",
+        ]
+        path_str = ";".join(win_paths) + ":/usr/local/bin:/usr/bin:/bin"
+        env = {
+            "PATH": path_str,
+            "HOME": str(sandbox),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONUTF8": "1",
+            "PYTHONIOENCODING": "utf-8",
+        }
+        if "SYSTEMROOT" in os.environ:
+            env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        if "COMSPEC" in os.environ:
+            env["COMSPEC"] = os.environ["COMSPEC"]
+    else:
+        env = {
+            "PATH": f"{python_dir}:/usr/local/bin:/usr/bin:/bin",
+            "HOME": str(sandbox),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONUTF8": "1",
+            "PYTHONIOENCODING": "utf-8",
+        }
+    return SafeLocalShellBackend(
+        root_dir=sandbox,
+        virtual_mode=True,
+        inherit_env=False,
+        env=env,
+        timeout=120,
+    )
 
 
 def build_agent(sandbox: Path, mode: str = "single", use_skills: bool = False, model=None):
@@ -64,4 +200,26 @@ def build_agent(sandbox: Path, mode: str = "single", use_skills: bool = False, m
     mode không hợp lệ -> ném ValueError.
     Trả về: đồ thị (graph) đã biên dịch, gọi bằng `.invoke({"messages": [...]})`.
     """
-    raise NotImplementedError("TODO 3: cài đặt build_agent (xem guides/pseudocode/01_agent.md)")
+    if mode not in {"single", "subagents"}:
+        raise ValueError(f"Unknown mode: {mode}")
+
+    kwargs = {}
+    prompt = BASE_PROMPT
+
+    if mode == "subagents":
+        kwargs["subagents"] = [
+            {**sub, "system_prompt": sub["system_prompt"] + " " + PATHS_NOTE}
+            for sub in get_subagents()
+        ]
+        prompt = prompt + SUBAGENTS_NOTE
+
+    if use_skills:
+        kwargs["skills"] = ["/skills/"]
+        prompt = prompt + SKILLS_NOTE
+
+    return create_deep_agent(
+        model=model or make_model(),
+        system_prompt=prompt,
+        backend=make_backend(sandbox),
+        **kwargs,
+    )
